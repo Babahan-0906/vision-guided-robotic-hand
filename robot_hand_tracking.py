@@ -1,4 +1,5 @@
 import argparse
+import os
 import sys
 import time
 
@@ -7,6 +8,10 @@ import mediapipe as mp
 import numpy as np
 
 from robot_arm_view import RobotArmIsoView, RobotRollMapper, select_primary_hand
+from Roboarm_tasks.task_runtime import BASE_POSES, clamp
+
+COMMAND_FILE = "ble_command.txt"
+MAX_FINGER_CURL = 450.0
 
 
 HUD_BG = (18, 18, 28)
@@ -81,7 +86,7 @@ def parse_args():
         help="Smoothing factor for displayed robot fingers. Higher is more responsive.",
     )
     parser.add_argument(
-        "--roll-deadband",
+        "--roll-tolerance",
         type=float,
         default=1.5,
         help="Degrees around neutral to command as zero roll.",
@@ -93,6 +98,36 @@ def parse_args():
         choices=(0, 1),
         help="0 is faster; 1 may be more accurate.",
     )
+    parser.add_argument(
+        "--update-rate-ms",
+        type=int,
+        default=25,
+        help="Milliseconds between console updates.",
+    )
+    parser.add_argument(
+        "--hub-name",
+        default="monday",
+        help="BLE name of the SPIKE hub (e.g. monday).",
+    )
+    parser.add_argument(
+        "--hub-timeout",
+        type=float,
+        default=15.0,
+        help="Seconds to wait for BLE hub connection.",
+    )
+    # Motor Scaling Factors
+    parser.add_argument("--scale-yaw", type=float, default=1.5, help="Scaling factor for elbow yaw.")
+    parser.add_argument("--scale-roll", type=float, default=1.0, help="Scaling factor for wrist roll.")
+    parser.add_argument("--scale-thumb", type=float, default=-6.5, help="Scaling factor for thumb.")
+    parser.add_argument("--scale-index", type=float, default=2.5, help="Scaling factor for index finger.")
+    parser.add_argument("--scale-middle", type=float, default=2.5, help="Scaling factor for middle finger.")
+    parser.add_argument("--scale-ring", type=float, default=1.9, help="Scaling factor for ring finger.")
+    parser.add_argument("--scale-pinky", type=float, default=1.9, help="Scaling factor for pinky finger.")
+
+    # Roll Snapping
+    parser.add_argument("--snap-roll", action="store_true", help="Snap wrist roll to fixed values instead of continuous tracking.")
+    parser.add_argument("--snap-roll-value", type=float, default=120.0, help="The degree value to snap to when --snap-roll is active.")
+    
     return parser.parse_args()
 
 
@@ -170,11 +205,18 @@ def main():
         smoothing=args.roll_smoothing,
         yaw_smoothing=args.yaw_smoothing,
         finger_smoothing=args.finger_smoothing,
-        deadband_deg=args.roll_deadband,
+        deadband_deg=args.roll_tolerance,
     )
     robot_view = RobotArmIsoView(width=args.robot_panel_width)
 
+    print(f"File-based command mode active. Commands writing to: {COMMAND_FILE}")
+    # Ensure directory exists if there is one
+    cmd_dir = os.path.dirname(COMMAND_FILE)
+    if cmd_dir:
+        os.makedirs(cmd_dir, exist_ok=True)
+    
     prev_time = time.perf_counter()
+    last_send_time = 0.0
     fps = 0.0
 
     with mp_hands.Hands(
@@ -239,6 +281,73 @@ def main():
             prev_time = now
             if dt > 0:
                 fps = 0.9 * fps + 0.1 * (1.0 / dt) if fps else 1.0 / dt
+
+            if robot_state["has_signal"]:
+                if (now - last_send_time) * 1000 >= args.update_rate_ms:
+                    last_send_time = now
+                    targets = dict(BASE_POSES["neutral"])
+                    
+                    # Apply scaling and clamping to Yaw/Roll
+                    targets["yaw"] = clamp(
+                        robot_state["command_yaw_deg"] * args.scale_yaw,
+                        -args.yaw_limit,
+                        args.yaw_limit
+                    )
+                    
+                    # Handle Roll Snapping or Continuous Tracking
+                    raw_roll = robot_state["command_roll_deg"] * args.scale_roll
+                    if args.snap_roll:
+                        if raw_roll > args.roll_tolerance:
+                            targets["wrist_roll"] = args.snap_roll_value
+                        elif raw_roll < -args.roll_tolerance:
+                            targets["wrist_roll"] = -args.snap_roll_value
+                        else:
+                            targets["wrist_roll"] = 0.0
+                    else:
+                        targets["wrist_roll"] = clamp(
+                            raw_roll,
+                            -args.roll_limit,
+                            args.roll_limit
+                        )
+
+                    if robot_state["finger_pose"]:
+                        finger_scales = {
+                            "thumb": args.scale_thumb,
+                            "index": args.scale_index,
+                            "middle": args.scale_middle,
+                            "ring": args.scale_ring,
+                            "pinky": args.scale_pinky,
+                        }
+                        for finger in ("thumb", "index", "middle", "ring", "pinky"):
+                            curl = robot_state["finger_pose"].get(finger, 0.0)
+                            # Multiply by scale first, then clamp using the constant
+                            scaled_curl = curl * MAX_FINGER_CURL * finger_scales[finger]
+                            targets[finger] = clamp(scaled_curl, -MAX_FINGER_CURL, MAX_FINGER_CURL)
+
+                    # Format: yaw,roll,thumb,index,middle,ring,pinky
+                    order = ("yaw", "wrist_roll", "thumb", "index", "middle", "ring", "pinky")
+                    values = [str(int(targets.get(k, 0.0))) for k in order]
+                    cmd_line = ",".join(values)
+
+                    try:
+                        with open(COMMAND_FILE, "w") as f:
+                            f.write(cmd_line)
+                    except Exception as e:
+                        print(f"Error writing to command file: {e}")
+
+                    print(
+                        "[file] {} | [throttle] yaw: {:+05.1f} | roll: {:+05.1f} | "
+                        "thumb: {:03.0f} | idx: {:03.0f} | mid: {:03.0f} | ring: {:03.0f} | pinky: {:03.0f}".format(
+                            cmd_line,
+                            targets["yaw"],
+                            targets["wrist_roll"],
+                            targets["thumb"],
+                            targets["index"],
+                            targets["middle"],
+                            targets["ring"],
+                            targets["pinky"],
+                        )
+                    )
 
             draw_hud(frame, fps, primary_hand is not None)
             display_frame = np.hstack((frame, robot_panel))

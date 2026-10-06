@@ -100,3 +100,67 @@ uv run --no-sync python -c "import mediapipe as mp; print(mp.__version__)"
 ```
 
 The expected version is `0.10.9`.
+
+## Hub Mapping
+
+### Hub "friday" — Fingers & Roll
+
+The primary hub uses this port layout:
+
+- Port A: Thumb
+- Port B: Index finger
+- Port C: Middle finger
+- Port D: Ring finger
+- Port E: Pinky finger
+- Port F: Wrist roll
+
+### Hub "monday" — Yaw
+
+The second hub is reserved for wrist yaw:
+
+- Port F: Wrist yaw
+
+Port F is used here to stay consistent with the code's `MOTOR_PORTS` definition.
+
+## Running with Hardware (BLE)
+
+To control a physical SPIKE Prime arm, you must run the BLE bridge and the tracking script in separate terminals.
+
+### 1. Start the BLE Bridge
+This script connects to your hub and waits for commands from the tracking script.
+```bash
+uv run --no-sync run_ble_bridge.py --hub monday
+```
+
+### 2. Start the Hand Tracking
+Once the bridge is active, start the tracking engine:
+```bash
+uv run --no-sync robot_hand_tracking.py
+```
+
+---
+
+## Command Line Arguments Reference
+
+### Motion Tuning
+* `--roll-tolerance` (float, default: `1.5`): Degrees around neutral to command as zero roll (deadband).
+
+### Motor Output Scaling
+Use these to adjust sensitivity or reverse motor direction (using negative values).
+* `--scale-yaw` (float, default: `1.0`): Final scaling factor applied to elbow yaw.
+* `--scale-roll` (float, default: `1.0`): Final scaling factor applied to wrist roll.
+* `--scale-thumb` (float, default: `1.0`): Scaling factor for the thumb motor.
+* `--scale-index` (float, default: `1.0`): Scaling factor for the index finger motor.
+* `--scale-middle` (float, default: `1.0`): Scaling factor for the middle finger motor.
+* `--scale-ring` (float, default: `1.0`): Scaling factor for the ring finger motor.
+* `--scale-pinky` (float, default: `1.0`): Scaling factor for the pinky finger motor.
+
+### Hardware & Connection
+* `--update-rate-ms` (int, default: `500`): Milliseconds between command updates.
+* `--hub-name` (string, default: `"monday"`): BLE name of the SPIKE hub.
+
+### Roll Snapping (not tested)
+* `--snap-roll`: If passed, snaps wrist roll to fixed max values instead of continuous tracking.
+* `--snap-roll-value` (float, default: `120.0`): The degree value to snap to when `--snap-roll` is active.
+
+                      

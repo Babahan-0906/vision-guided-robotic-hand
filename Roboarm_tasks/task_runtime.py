@@ -367,14 +367,11 @@ class ArmController:
 
     def move(self, label, targets=None, duration=0.45, note=None):
         targets = canonicalize_targets(targets)
-        for motor_name in targets:
-            if motor_name not in SAFE_LIMITS:
-                raise ValueError("Unknown motor '{}'".format(motor_name))
-
         clamped_targets = {}
         for motor_name, value in targets.items():
-            low, high = SAFE_LIMITS[motor_name]
-            clamped_targets[motor_name] = clamp(float(value), low, high)
+            if motor_name in SAFE_LIMITS:
+                low, high = SAFE_LIMITS[motor_name]
+                clamped_targets[motor_name] = clamp(float(value), low, high)
 
         self.current.update(clamped_targets)
         self.step_index += 1
