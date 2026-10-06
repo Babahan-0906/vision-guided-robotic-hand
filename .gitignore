@@ -4,3 +4,11 @@ __pycache__/
 *.py[cod]
 .mypy_cache/
 .pytest_cache/
+
+# Runtime IPC file: written by robot_hand_tracking.py, created by
+# run_ble_bridge.py on startup if missing.
+ble_command.txt
+
+# Local music for Roboarm_tasks (not redistributable)
+Roboarm_tasks/songs/*.mp3
+Roboarm_tasks/songs/*.wav
